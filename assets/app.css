@@ -8,6 +8,7 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
 header { height:36px; display:flex; align-items:center; gap:12px; padding:0 12px;
   border-bottom:1px solid var(--line); font-size:12px; -webkit-user-select:none; }
 header .status { color:var(--muted); margin-right:auto; }
+header .status.warn { color:#bf8700; }
 #open, .seg button { background:none; border:1px solid var(--line); color:var(--fg); padding:3px 10px;
   cursor:pointer; font-size:12px; margin-left:-1px; }
 #open { border-radius:6px; margin-left:0; }
@@ -16,11 +17,18 @@ header .status { color:var(--muted); margin-right:auto; }
 main { display:grid; grid-template-columns:1fr 1fr; height:calc(100% - 36px); }
 main.raw-only { grid-template-columns:1fr; } main.raw-only #rendered { display:none; }
 main.ren-only { grid-template-columns:1fr; } main.ren-only #raw { display:none; }
-#raw { overflow:auto; background:var(--raw); border-right:1px solid var(--line); margin:0;
-  padding:16px 0; font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; counter-reset:ln; }
-#raw .l { display:block; padding-right:16px; white-space:pre-wrap; word-break:break-word; }
-#raw .l::before { counter-increment:ln; content:counter(ln); display:inline-block; width:3.5em;
-  padding-right:1em; text-align:right; color:var(--muted); -webkit-user-select:none; }
+/* Editor: a transparent textarea laid over a mirror of its text whose only visible part is the
+   line numbers, so numbers stay aligned with wrapped lines. Both must share font, padding and width. */
+#raw { overflow:auto; background:var(--raw); border-right:1px solid var(--line); }
+#raw .ed { position:relative; min-height:100%; }
+#gutter, #src { margin:0; padding:16px 16px 16px 4.5em; font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space:pre-wrap; word-break:break-word; overflow-wrap:break-word; tab-size:4; }
+#gutter { color:transparent; counter-reset:ln; -webkit-user-select:none; pointer-events:none; }
+#gutter .l { display:block; position:relative; }
+#gutter .l::before { counter-increment:ln; content:counter(ln); position:absolute; left:-4.5em; width:3.5em;
+  text-align:right; color:var(--muted); }
+#src { position:absolute; inset:0; width:100%; height:100%; border:0; outline:none; resize:none; overflow:hidden;
+  background:transparent; color:var(--fg); caret-color:var(--fg); }
 #rendered { overflow:auto; }
 .markdown-body { max-width:860px; margin:0 auto; padding:24px 32px; background:transparent; }
 #empty { display:none; position:fixed; inset:36px 0 0 0; align-items:center; justify-content:center;

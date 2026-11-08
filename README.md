@@ -1,12 +1,20 @@
-# MD Preview
+<p align="center"><img src="docs/logo.png" width="128" alt="MD Preview icon"></p>
 
-A tiny native Markdown viewer for macOS. It shows the raw source and the rendered output side by side, and reloads live whenever the file changes on disk.
+<h1 align="center">MD Preview</h1>
+
+A tiny native Markdown viewer and editor for macOS. It shows the source and the rendered output side by side, lets you edit the source with a live preview, and reloads whenever the file changes on disk.
 
 Built in Rust with [tao](https://crates.io/crates/tao) + [wry](https://crates.io/crates/wry) (system WebView) and [pulldown-cmark](https://crates.io/crates/pulldown-cmark). All assets are embedded in the binary; nothing is loaded from the network.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <img src="docs/screenshot-light.png" alt="MD Preview with the Markdown source on the left and the rendered document on the right">
+</picture>
 
 ## Features
 
 - **Split, Raw or Rendered view**: switch with the toolbar or `⌘1` / `⌘2` / `⌘3`. The choice is remembered.
+- **Editing**: the source pane is editable and the preview updates as you type. `⌘S` saves. Unsaved windows show *Edited* in the title, and closing or quitting asks before discarding changes. If the file changes on disk while you have unsaved edits, your edits are kept and a warning is shown.
 - **Live reload**: the file is polled every 400 ms; scroll position is kept on refresh.
 - **GitHub-flavored Markdown**: tables, task lists, strikethrough, footnotes, heading attributes, GitHub-style styling, and syntax highlighting (highlight.js) in light and dark mode.
 - **Local images and links**: relative image paths resolve against the document's folder. Links to other Markdown files open in a new window; web and `mailto:` links open in your default app; other local files open with `open`.
@@ -58,5 +66,6 @@ NOTARY_PROFILE=mdpreview \
 | `src/main.rs` | Windows, menus, file watching, Markdown rendering, and the `mdp://` protocol that serves the page, assets, and local images |
 | `assets/` | The embedded web UI (`index.html`, `app.js`, `app.css`), GitHub Markdown CSS, and highlight.js |
 | `icon/make-icon.swift` | Renders the 1024 px app icon |
+| `docs/` | Logo and screenshots used in this README |
 | `build-dmg.sh` | Builds the `.app` bundle and packages the `.dmg` |
 | `test.md`, `test-extended.md` | Sample documents covering common Markdown features |

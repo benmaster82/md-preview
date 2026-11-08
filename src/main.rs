@@ -1,4 +1,4 @@
-//! MD Preview: a tiny native markdown viewer. Raw source and rendered output side by side,
+//! MD Preview: a tiny native markdown editor/viewer. Editable source and rendered output side by side,
 //! live-reloading when the file changes on disk.
 
 use std::borrow::Cow;
@@ -36,6 +36,9 @@ enum UserEvent {
     Open(Vec<PathBuf>),
     PickFiles,
     Menu(MenuEvent),
+    /// Text to write to the window's document; `close` closes the window afterwards.
+    Save { id: WindowId, text: String, close: bool },
+    Dirty(WindowId, bool),
 }
 
 struct Viewer {
@@ -43,6 +46,7 @@ struct Viewer {
     webview: WebView,
     doc: Arc<Mutex<Option<PathBuf>>>,
     mtime: Option<SystemTime>,
+    dirty: bool,
 }
 
 fn main() {
@@ -56,6 +60,8 @@ fn main() {
 
     let menu = Menu::new();
     let open_item = MenuItem::new("Open…", true, "CmdOrCtrl+O".parse().ok());
+    let save_item = MenuItem::new("Save", true, "CmdOrCtrl+S".parse().ok());
+    let quit_item = MenuItem::new("Quit MD Preview", true, "CmdOrCtrl+Q".parse().ok());
     let split_item = MenuItem::new("Split", true, "CmdOrCtrl+1".parse().ok());
     let raw_item = MenuItem::new("Raw Only", true, "CmdOrCtrl+2".parse().ok());
     let ren_item = MenuItem::new("Rendered Only", true, "CmdOrCtrl+3".parse().ok());
@@ -68,20 +74,28 @@ fn main() {
             &PredefinedMenuItem::hide(None),
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(None),
+            &quit_item,
         ],
     )
     .unwrap();
     let file_menu = Submenu::with_items(
         "File",
         true,
-        &[&open_item, &PredefinedMenuItem::separator(), &PredefinedMenuItem::close_window(None)],
+        &[&open_item, &save_item, &PredefinedMenuItem::separator(), &PredefinedMenuItem::close_window(None)],
     )
     .unwrap();
     let edit_menu = Submenu::with_items(
         "Edit",
         true,
-        &[&PredefinedMenuItem::copy(None), &PredefinedMenuItem::select_all(None)],
+        &[
+            &PredefinedMenuItem::undo(None),
+            &PredefinedMenuItem::redo(None),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::cut(None),
+            &PredefinedMenuItem::copy(None),
+            &PredefinedMenuItem::paste(None),
+            &PredefinedMenuItem::select_all(None),
+        ],
     )
     .unwrap();
     let view_menu = Submenu::with_items(
@@ -119,7 +133,7 @@ fn main() {
                 }
                 for v in viewers.values_mut() {
                     let Some(path) = v.doc.lock().unwrap().clone() else { continue };
-                    let m = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+                    let m = mtime(&path);
                     if m.is_some() && m != v.mtime {
                         v.mtime = m;
                         let _ = v.webview.evaluate_script("refresh()");
@@ -155,6 +169,15 @@ fn main() {
             Event::UserEvent(UserEvent::Menu(e)) => {
                 if e.id == open_item.id() {
                     let _ = proxy.send_event(UserEvent::PickFiles);
+                } else if e.id == quit_item.id() {
+                    let unsaved = viewers.values().filter(|v| v.dirty).count();
+                    if unsaved == 0 || confirm_quit(unsaved) {
+                        *control_flow = ControlFlow::Exit;
+                    }
+                } else if e.id == save_item.id() {
+                    if let Some(v) = focused.and_then(|id| viewers.get(&id)) {
+                        let _ = v.webview.evaluate_script("save(false)");
+                    }
                 } else if let Some(v) = focused.and_then(|id| viewers.get(&id)) {
                     let mode = if e.id == split_item.id() {
                         ""
@@ -168,12 +191,32 @@ fn main() {
                     let _ = v.webview.evaluate_script(&format!("setMode('{mode}')"));
                 }
             }
+            Event::UserEvent(UserEvent::Dirty(id, dirty)) => {
+                if let Some(v) = viewers.get_mut(&id) {
+                    v.dirty = dirty;
+                    update_title(v);
+                }
+            }
+            Event::UserEvent(UserEvent::Save { id, text, close }) => {
+                let saved = viewers.get_mut(&id).is_some_and(|v| save(v, &text));
+                if saved && close {
+                    close_viewer(&mut viewers, id, control_flow);
+                }
+            }
             Event::WindowEvent { window_id, event, .. } => match event {
                 WindowEvent::Focused(true) => focused = Some(window_id),
                 WindowEvent::CloseRequested => {
-                    viewers.remove(&window_id);
-                    if viewers.is_empty() {
-                        *control_flow = ControlFlow::Exit;
+                    let Some(v) = viewers.get(&window_id) else { return };
+                    if !v.dirty {
+                        close_viewer(&mut viewers, window_id, control_flow);
+                        return;
+                    }
+                    match confirm_close(v) {
+                        CloseChoice::Save => {
+                            let _ = v.webview.evaluate_script("save(true)");
+                        }
+                        CloseChoice::Discard => close_viewer(&mut viewers, window_id, control_flow),
+                        CloseChoice::Cancel => {}
                     }
                 }
                 _ => {}
@@ -181,6 +224,78 @@ fn main() {
             _ => {}
         }
     });
+}
+
+fn close_viewer(viewers: &mut HashMap<WindowId, Viewer>, id: WindowId, control_flow: &mut ControlFlow) {
+    viewers.remove(&id);
+    if viewers.is_empty() {
+        *control_flow = ControlFlow::Exit;
+    }
+}
+
+enum CloseChoice {
+    Save,
+    Discard,
+    Cancel,
+}
+
+fn confirm_close(v: &Viewer) -> CloseChoice {
+    let name = v.doc.lock().unwrap().as_deref().map(title_for).unwrap_or_default();
+    let (save, discard, cancel) = ("Save".to_string(), "Don't Save".to_string(), "Cancel".to_string());
+    let res = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("Unsaved changes")
+        .set_description(format!("Do you want to save the changes you made to “{name}”?"))
+        .set_buttons(rfd::MessageButtons::YesNoCancelCustom(save.clone(), discard.clone(), cancel))
+        .set_parent(&v.window)
+        .show();
+    match res {
+        rfd::MessageDialogResult::Custom(s) if s == save => CloseChoice::Save,
+        rfd::MessageDialogResult::Custom(s) if s == discard => CloseChoice::Discard,
+        _ => CloseChoice::Cancel,
+    }
+}
+
+fn confirm_quit(unsaved: usize) -> bool {
+    let quit = "Quit Anyway".to_string();
+    let docs = if unsaved == 1 { "1 document has".to_string() } else { format!("{unsaved} documents have") };
+    let res = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("Unsaved changes")
+        .set_description(format!("{docs} unsaved changes. Quit and discard them?"))
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(quit.clone(), "Cancel".into()))
+        .show();
+    matches!(res, rfd::MessageDialogResult::Custom(s) if s == quit)
+}
+
+/// Write `text` to the viewer's document. Returns whether it was saved.
+fn save(v: &mut Viewer, text: &str) -> bool {
+    let Some(path) = v.doc.lock().unwrap().clone() else { return false };
+    if let Err(e) = std::fs::write(&path, text) {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("Couldn't save")
+            .set_description(format!("{}: {e}", path.display()))
+            .set_parent(&v.window)
+            .show();
+        return false;
+    }
+    // Record our own write so the poller doesn't treat it as an external change.
+    v.mtime = mtime(&path);
+    v.dirty = false;
+    update_title(v);
+    let _ = v.webview.evaluate_script("saved()");
+    true
+}
+
+fn mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+fn update_title(v: &Viewer) {
+    let Some(path) = v.doc.lock().unwrap().clone() else { return };
+    let title = title_for(&path);
+    v.window.set_title(&if v.dirty { format!("{title} — Edited") } else { title });
 }
 
 /// Focus the window already showing `path`, else reuse an empty window, else open a new one.
@@ -223,13 +338,24 @@ fn new_viewer(
     let nav_proxy = proxy.clone();
     let drop_proxy = proxy.clone();
     let ipc_proxy = proxy.clone();
+    let id = window.id();
 
     let webview = WebViewBuilder::new()
         .with_custom_protocol("mdp".into(), move |_id, req| serve(&proto_doc, req))
         .with_ipc_handler(move |req| {
-            if req.body() == "open" {
-                let _ = ipc_proxy.send_event(UserEvent::PickFiles);
-            }
+            let body = req.body();
+            let event = if body == "open" {
+                UserEvent::PickFiles
+            } else if let Some(text) = body.strip_prefix("save:") {
+                UserEvent::Save { id, text: text.to_owned(), close: false }
+            } else if let Some(text) = body.strip_prefix("save-close:") {
+                UserEvent::Save { id, text: text.to_owned(), close: true }
+            } else if let Some(flag) = body.strip_prefix("dirty:") {
+                UserEvent::Dirty(id, flag == "1")
+            } else {
+                return;
+            };
+            let _ = ipc_proxy.send_event(event);
         })
         .with_navigation_handler(move |url| handle_navigation(&nav_proxy, &url))
         .with_drag_drop_handler(move |e| {
@@ -242,8 +368,8 @@ fn new_viewer(
         .build(&window)
         .expect("create webview");
 
-    let mtime = doc.lock().unwrap().as_ref().and_then(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
-    viewers.insert(window.id(), Viewer { window, webview, doc, mtime });
+    let mtime = doc.lock().unwrap().as_deref().and_then(mtime);
+    viewers.insert(window.id(), Viewer { window, webview, doc, mtime, dirty: false });
 }
 
 fn title_for(path: &Path) -> String {
@@ -280,6 +406,11 @@ fn serve(doc: &Mutex<Option<PathBuf>>, req: Request<Vec<u8>>) -> Response<Cow<'s
             let json = content_json(doc.lock().unwrap().as_deref());
             respond(200, "application/json", json.into_bytes().into())
         }
+        // Live preview of unsaved edits: the request body is the markdown source.
+        "/__mdp/render" => {
+            let json = serde_json::json!({ "html": render(&String::from_utf8_lossy(req.body())) }).to_string();
+            respond(200, "application/json", json.into_bytes().into())
+        }
         p if p.starts_with("/__mdp/") => match ASSETS.iter().find(|(n, _, _)| p[7..] == **n) {
             Some((_, mime, data)) => respond(200, mime, Cow::Borrowed(data)),
             None => respond(404, "text/plain", Cow::Borrowed(b"not found")),
@@ -313,19 +444,23 @@ fn content_json(path: Option<&Path>) -> String {
         Ok(b) => String::from_utf8_lossy(&b).into_owned(),
         Err(e) => return serde_json::json!({ "error": format!("{}: {e}", path.display()) }).to_string(),
     };
+    let rendered = render(&raw);
+    const PATH_SET: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'%').add(b'?').add(b'<').add(b'>');
+    let dir = path.parent().unwrap_or(Path::new("/")).to_string_lossy();
+    let base = format!("{ORIGIN}{}/", utf8_percent_encode(dir.trim_end_matches('/'), PATH_SET));
+    serde_json::json!({ "raw": raw, "html": rendered, "base": base }).to_string()
+}
+
+fn render(md: &str) -> String {
     let opts = Options::ENABLE_TABLES
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_GFM
         | Options::ENABLE_HEADING_ATTRIBUTES;
-    let mut rendered = String::new();
-    html::push_html(&mut rendered, Parser::new_ext(&raw, opts));
-
-    const PATH_SET: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'%').add(b'?').add(b'<').add(b'>');
-    let dir = path.parent().unwrap_or(Path::new("/")).to_string_lossy();
-    let base = format!("{ORIGIN}{}/", utf8_percent_encode(dir.trim_end_matches('/'), PATH_SET));
-    serde_json::json!({ "raw": raw, "html": rendered, "base": base }).to_string()
+    let mut out = String::new();
+    html::push_html(&mut out, Parser::new_ext(md, opts));
+    out
 }
 
 fn mime_for(path: &Path) -> &'static str {
