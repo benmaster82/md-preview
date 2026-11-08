@@ -29,3 +29,7 @@ Requires Rust and the Xcode command line tools.
 cargo run -- path/to/file.md   # run
 ./build-dmg.sh                 # build dist/MD-Preview.dmg
 ```
+
+## License
+
+[MIT](LICENSE)
