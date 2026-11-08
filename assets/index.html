@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<base href="mdp://localhost/">
+<link rel="stylesheet" href="/__mdp/github-markdown.css">
+<link rel="stylesheet" href="/__mdp/hljs-light.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="/__mdp/hljs-dark.css" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="/__mdp/app.css">
+<script src="/__mdp/hljs.js"></script>
+<script src="/__mdp/app.js" defer></script>
+</head>
+<body>
+<header>
+  <button id="open" title="Open a file (⌘O)">Open…</button>
+  <span class="status" id="status"></span>
+  <span class="seg">
+    <button data-mode="">Split</button><button data-mode="raw-only">Raw</button><button data-mode="ren-only">Rendered</button>
+  </span>
+</header>
+<main id="main">
+  <pre id="raw"></pre>
+  <div id="rendered"><article class="markdown-body" id="md"></article></div>
+</main>
+<div id="empty"><div>Drop a Markdown file here<br><small>or click to choose one (⌘O)</small></div></div>
+</body></html>
