@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MD Preview
+Comment=Markdown viewer and editor with live preview
+Exec=md-preview %F
+Icon=md-preview
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/markdown;text/x-markdown;
+StartupWMClass=md-preview

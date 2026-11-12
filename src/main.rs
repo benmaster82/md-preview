@@ -1,6 +1,9 @@
 //! MD Preview: a tiny native markdown editor/viewer. Editable source and rendered output side by side,
 //! live-reloading when the file changes on disk.
 
+// No console window behind the app on Windows.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,7 +19,16 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWi
 use tao::window::{Window, WindowBuilder, WindowId};
 use wry::{DragDropEvent, WebView, WebViewBuilder};
 
+#[cfg(windows)]
+use tao::platform::windows::{IconExtWindows, WindowExtWindows};
+#[cfg(target_os = "linux")]
+use {tao::platform::unix::WindowExtUnix, wry::WebViewBuilderExtUnix};
+
+/// Where the `mdp` custom protocol is served. WebView2 exposes custom protocols as `http://<scheme>.localhost`.
+#[cfg(not(windows))]
 const ORIGIN: &str = "mdp://localhost";
+#[cfg(windows)]
+const ORIGIN: &str = "http://mdp.localhost";
 const POLL: Duration = Duration::from_millis(400);
 const MD_EXTS: &[&str] = &["md", "markdown", "mdown", "mkd", "mdx", "txt"];
 
@@ -61,29 +73,12 @@ fn main() {
     let menu = Menu::new();
     let open_item = MenuItem::new("Open…", true, "CmdOrCtrl+O".parse().ok());
     let save_item = MenuItem::new("Save", true, "CmdOrCtrl+S".parse().ok());
-    let quit_item = MenuItem::new("Quit MD Preview", true, "CmdOrCtrl+Q".parse().ok());
+    let quit_label = if cfg!(target_os = "macos") { "Quit MD Preview" } else { "Quit" };
+    let quit_item = MenuItem::new(quit_label, true, "CmdOrCtrl+Q".parse().ok());
     let split_item = MenuItem::new("Split", true, "CmdOrCtrl+1".parse().ok());
     let raw_item = MenuItem::new("Raw Only", true, "CmdOrCtrl+2".parse().ok());
     let ren_item = MenuItem::new("Rendered Only", true, "CmdOrCtrl+3".parse().ok());
-    let app_menu = Submenu::with_items(
-        "MD Preview",
-        true,
-        &[
-            &PredefinedMenuItem::about(None, None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::hide(None),
-            &PredefinedMenuItem::hide_others(None),
-            &PredefinedMenuItem::separator(),
-            &quit_item,
-        ],
-    )
-    .unwrap();
-    let file_menu = Submenu::with_items(
-        "File",
-        true,
-        &[&open_item, &save_item, &PredefinedMenuItem::separator(), &PredefinedMenuItem::close_window(None)],
-    )
-    .unwrap();
+    let file_menu = Submenu::with_items("File", true, &[&open_item, &save_item, &PredefinedMenuItem::separator()]).unwrap();
     let edit_menu = Submenu::with_items(
         "Edit",
         true,
@@ -98,14 +93,36 @@ fn main() {
         ],
     )
     .unwrap();
-    let view_menu = Submenu::with_items(
-        "View",
-        true,
-        &[&split_item, &raw_item, &ren_item, &PredefinedMenuItem::separator(), &PredefinedMenuItem::fullscreen(None)],
-    )
-    .unwrap();
-    let window_menu = Submenu::with_items("Window", true, &[&PredefinedMenuItem::minimize(None)]).unwrap();
-    menu.append_items(&[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu]).unwrap();
+    let view_menu = Submenu::with_items("View", true, &[&split_item, &raw_item, &ren_item]).unwrap();
+
+    // macOS: one app-wide menu bar, with the usual app and Window menus.
+    #[cfg(target_os = "macos")]
+    let window_menu = {
+        let app_menu = Submenu::with_items(
+            "MD Preview",
+            true,
+            &[
+                &PredefinedMenuItem::about(None, None),
+                &PredefinedMenuItem::separator(),
+                &PredefinedMenuItem::hide(None),
+                &PredefinedMenuItem::hide_others(None),
+                &PredefinedMenuItem::separator(),
+                &quit_item,
+            ],
+        )
+        .unwrap();
+        file_menu.append(&PredefinedMenuItem::close_window(None)).unwrap();
+        view_menu.append_items(&[&PredefinedMenuItem::separator(), &PredefinedMenuItem::fullscreen(None)]).unwrap();
+        let window_menu = Submenu::with_items("Window", true, &[&PredefinedMenuItem::minimize(None)]).unwrap();
+        menu.append_items(&[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu]).unwrap();
+        window_menu
+    };
+    // Windows and Linux: the same menu bar is attached to every window (see `new_viewer`).
+    #[cfg(not(target_os = "macos"))]
+    {
+        file_menu.append(&quit_item).unwrap();
+        menu.append_items(&[&file_menu, &edit_menu, &view_menu]).unwrap();
+    }
 
     let cli_files: Vec<PathBuf> = std::env::args().skip(1).filter(|a| !a.starts_with("-psn")).map(PathBuf::from).collect();
 
@@ -119,8 +136,11 @@ fn main() {
 
         match event {
             Event::NewEvents(StartCause::Init) => {
-                menu.init_for_nsapp();
-                window_menu.set_as_windows_menu_for_nsapp();
+                #[cfg(target_os = "macos")]
+                {
+                    menu.init_for_nsapp();
+                    window_menu.set_as_windows_menu_for_nsapp();
+                }
                 if !cli_files.is_empty() {
                     let _ = proxy.send_event(UserEvent::Open(cli_files.clone()));
                 }
@@ -129,7 +149,7 @@ fn main() {
                 // Launched without a file (and Finder didn't hand us one): show an empty drop target.
                 if !opened_any && viewers.is_empty() && started.elapsed() > Duration::from_millis(500) {
                     opened_any = true;
-                    new_viewer(target, &proxy, &mut viewers, None);
+                    new_viewer(target, &proxy, &menu, &mut viewers, None);
                 }
                 for v in viewers.values_mut() {
                     let Some(path) = v.doc.lock().unwrap().clone() else { continue };
@@ -145,12 +165,12 @@ fn main() {
                 let _ = proxy.send_event(UserEvent::Open(paths));
             }
             Event::Reopen { has_visible_windows: false, .. } => {
-                new_viewer(target, &proxy, &mut viewers, None);
+                new_viewer(target, &proxy, &menu, &mut viewers, None);
             }
             Event::UserEvent(UserEvent::Open(paths)) => {
                 for p in paths {
                     opened_any = true;
-                    open_path(target, &proxy, &mut viewers, p);
+                    open_path(target, &proxy, &menu, &mut viewers, p);
                 }
             }
             Event::UserEvent(UserEvent::PickFiles) => {
@@ -200,7 +220,7 @@ fn main() {
             Event::UserEvent(UserEvent::Save { id, text, close }) => {
                 let saved = viewers.get_mut(&id).is_some_and(|v| save(v, &text));
                 if saved && close {
-                    close_viewer(&mut viewers, id, control_flow);
+                    close_viewer(&menu, &mut viewers, id, control_flow);
                 }
             }
             Event::WindowEvent { window_id, event, .. } => match event {
@@ -208,14 +228,14 @@ fn main() {
                 WindowEvent::CloseRequested => {
                     let Some(v) = viewers.get(&window_id) else { return };
                     if !v.dirty {
-                        close_viewer(&mut viewers, window_id, control_flow);
+                        close_viewer(&menu, &mut viewers, window_id, control_flow);
                         return;
                     }
                     match confirm_close(v) {
                         CloseChoice::Save => {
                             let _ = v.webview.evaluate_script("save(true)");
                         }
-                        CloseChoice::Discard => close_viewer(&mut viewers, window_id, control_flow),
+                        CloseChoice::Discard => close_viewer(&menu, &mut viewers, window_id, control_flow),
                         CloseChoice::Cancel => {}
                     }
                 }
@@ -226,8 +246,16 @@ fn main() {
     });
 }
 
-fn close_viewer(viewers: &mut HashMap<WindowId, Viewer>, id: WindowId, control_flow: &mut ControlFlow) {
-    viewers.remove(&id);
+#[cfg_attr(not(windows), allow(unused_variables))]
+fn close_viewer(menu: &Menu, viewers: &mut HashMap<WindowId, Viewer>, id: WindowId, control_flow: &mut ControlFlow) {
+    if let Some(v) = viewers.remove(&id) {
+        // Detach the shared menu first: Windows destroys a window's menu along with the window.
+        #[cfg(windows)]
+        unsafe {
+            let _ = menu.remove_for_hwnd(v.window.hwnd() as _);
+        }
+        drop(v);
+    }
     if viewers.is_empty() {
         *control_flow = ControlFlow::Exit;
     }
@@ -302,10 +330,11 @@ fn update_title(v: &Viewer) {
 fn open_path(
     target: &EventLoopWindowTarget<UserEvent>,
     proxy: &EventLoopProxy<UserEvent>,
+    menu: &Menu,
     viewers: &mut HashMap<WindowId, Viewer>,
     path: PathBuf,
 ) {
-    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    let path = canonical(path);
     if let Some(v) = viewers.values().find(|v| v.doc.lock().unwrap().as_ref() == Some(&path)) {
         v.window.set_focus();
         return;
@@ -317,21 +346,30 @@ fn open_path(
         v.window.set_focus();
         return;
     }
-    new_viewer(target, proxy, viewers, Some(path));
+    new_viewer(target, proxy, menu, viewers, Some(path));
 }
 
+#[cfg_attr(target_os = "macos", allow(unused_variables))]
 fn new_viewer(
     target: &EventLoopWindowTarget<UserEvent>,
     proxy: &EventLoopProxy<UserEvent>,
+    menu: &Menu,
     viewers: &mut HashMap<WindowId, Viewer>,
     path: Option<PathBuf>,
 ) {
     let title = path.as_deref().map(title_for).unwrap_or_else(|| "MD Preview".into());
-    let window = WindowBuilder::new()
-        .with_title(title)
-        .with_inner_size(tao::dpi::LogicalSize::new(1300.0, 850.0))
-        .build(target)
-        .expect("create window");
+    let builder = WindowBuilder::new().with_title(title).with_inner_size(tao::dpi::LogicalSize::new(1300.0, 850.0));
+    // The icon embedded in the .exe by build.rs.
+    #[cfg(windows)]
+    let builder = builder.with_window_icon(tao::window::Icon::from_resource(1, None).ok());
+    let window = builder.build(target).expect("create window");
+
+    #[cfg(windows)]
+    unsafe {
+        let _ = menu.init_for_hwnd(window.hwnd() as _);
+    }
+    #[cfg(target_os = "linux")]
+    let _ = menu.init_for_gtk_window(window.gtk_window(), window.default_vbox());
 
     let doc = Arc::new(Mutex::new(path));
     let proto_doc = doc.clone();
@@ -340,7 +378,7 @@ fn new_viewer(
     let ipc_proxy = proxy.clone();
     let id = window.id();
 
-    let webview = WebViewBuilder::new()
+    let builder = WebViewBuilder::new()
         .with_custom_protocol("mdp".into(), move |_id, req| serve(&proto_doc, req))
         .with_ipc_handler(move |req| {
             let body = req.body();
@@ -364,9 +402,13 @@ fn new_viewer(
             }
             true
         })
-        .with_url(format!("{ORIGIN}/"))
-        .build(&window)
-        .expect("create webview");
+        .with_url(format!("{ORIGIN}/"));
+    // On Linux the webview goes into the window's box, below the menu bar.
+    #[cfg(target_os = "linux")]
+    let webview = builder.build_gtk(window.default_vbox().expect("window box"));
+    #[cfg(not(target_os = "linux"))]
+    let webview = builder.build(&window);
+    let webview = webview.expect("create webview");
 
     let mtime = doc.lock().unwrap().as_deref().and_then(mtime);
     viewers.insert(window.id(), Viewer { window, webview, doc, mtime, dirty: false });
@@ -376,11 +418,11 @@ fn title_for(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-/// Allow the page itself; open other markdown files in new windows; send everything else to macOS.
+/// Allow the page itself; open other markdown files in new windows; send everything else to the system.
 fn handle_navigation(proxy: &EventLoopProxy<UserEvent>, url: &str) -> bool {
     let Some(rest) = url.strip_prefix(ORIGIN) else {
         if url.starts_with("http:") || url.starts_with("https:") || url.starts_with("mailto:") {
-            let _ = std::process::Command::new("open").arg(url).spawn();
+            open_external(url);
         }
         return false;
     };
@@ -388,14 +430,50 @@ fn handle_navigation(proxy: &EventLoopProxy<UserEvent>, url: &str) -> bool {
     if path == "/" {
         return true;
     }
-    let path = PathBuf::from(percent_decode_str(path).decode_utf8_lossy().as_ref());
+    let path = fs_path(path);
     let is_md = path.extension().is_some_and(|e| MD_EXTS.contains(&e.to_string_lossy().to_lowercase().as_str()));
     if is_md {
         let _ = proxy.send_event(UserEvent::Open(vec![path]));
     } else if path.exists() {
-        let _ = std::process::Command::new("open").arg(&path).spawn();
+        open_external(&path);
     }
     false
+}
+
+/// Open a URL or file with the system's default application.
+fn open_external(target: impl AsRef<std::ffi::OsStr>) {
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("open");
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut cmd = std::process::Command::new("rundll32");
+        cmd.arg("url.dll,FileProtocolHandler");
+        cmd
+    };
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let mut cmd = std::process::Command::new("xdg-open");
+    let _ = cmd.arg(target).spawn();
+}
+
+/// Canonical form of `path`, minus the `\\?\` prefix Windows adds (it doesn't survive a trip through a URL).
+fn canonical(path: PathBuf) -> PathBuf {
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(s) if !s.starts_with("UNC\\") => PathBuf::from(s),
+        _ => path,
+    }
+}
+
+/// The URL path for a file: `/home/me/a.md`, or `/C:/Users/me/a.md` on Windows. Not percent-encoded.
+fn url_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if cfg!(windows) { format!("/{}", s.replace('\\', "/")) } else { s.into_owned() }
+}
+
+/// The inverse of `url_path`, for a percent-encoded URL path.
+fn fs_path(url_path: &str) -> PathBuf {
+    let decoded = percent_decode_str(url_path).decode_utf8_lossy();
+    PathBuf::from(if cfg!(windows) { decoded.trim_start_matches('/') } else { &decoded })
 }
 
 fn serve(doc: &Mutex<Option<PathBuf>>, req: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
@@ -417,7 +495,7 @@ fn serve(doc: &Mutex<Option<PathBuf>>, req: Request<Vec<u8>>) -> Response<Cow<'s
         },
         // Anything else is a file referenced by the document (images etc.), by absolute path.
         p => {
-            let fs_path = PathBuf::from(percent_decode_str(p).decode_utf8_lossy().as_ref());
+            let fs_path = fs_path(p);
             match std::fs::read(&fs_path) {
                 Ok(bytes) => respond(200, mime_for(&fs_path), bytes.into()),
                 Err(_) => respond(404, "text/plain", Cow::Borrowed(b"not found")),
@@ -446,7 +524,7 @@ fn content_json(path: Option<&Path>) -> String {
     };
     let rendered = render(&raw);
     const PATH_SET: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'%').add(b'?').add(b'<').add(b'>');
-    let dir = path.parent().unwrap_or(Path::new("/")).to_string_lossy();
+    let dir = url_path(path.parent().unwrap_or(Path::new("/")));
     let base = format!("{ORIGIN}{}/", utf8_percent_encode(dir.trim_end_matches('/'), PATH_SET));
     serde_json::json!({ "raw": raw, "html": rendered, "base": base }).to_string()
 }

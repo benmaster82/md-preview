@@ -3,17 +3,40 @@ name = "md-preview"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+description = "A tiny native Markdown viewer and editor with live preview"
+authors = ["mfranzon <43796979+mfranzon@users.noreply.github.com>"]
+build = "build.rs"
 
 [dependencies]
 http = "1"
 muda = "0.21.2"
 percent-encoding = "2"
 pulldown-cmark = "0.13.6"
-rfd = "0.17.2"
 serde_json = "1.0.154"
 tao = "0.37.2"
 url = "2"
 wry = "0.57.1"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+rfd = "0.17.2"
+
+# GTK dialogs on Linux: the app already runs a GTK main loop, and they support custom buttons.
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { version = "0.17.2", default-features = false, features = ["gtk3"] }
+
+# Host is Windows: embeds the icon into the .exe
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+# `cargo deb` (on Linux) builds target/debian/md-preview_<version>_<arch>.deb
+[package.metadata.deb]
+section = "text"
+extended-description = "Markdown source and rendered output side by side, with live preview and live reload."
+assets = [
+    ["target/release/md-preview", "usr/bin/", "755"],
+    ["packaging/md-preview.desktop", "usr/share/applications/", "644"],
+    ["docs/logo.png", "usr/share/icons/hicolor/256x256/apps/md-preview.png", "644"],
+]
 
 [profile.release]
 lto = true

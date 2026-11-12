@@ -101,6 +101,22 @@ function saved() {
   setStatus('saved ' + new Date().toLocaleTimeString());
 }
 
+// WebView2 keeps key presses to itself, so the menu's shortcuts never fire on Windows: handle them here.
+if (navigator.userAgent.includes('Windows')) {
+  const keys = { s: () => save(false), o: pickFile, 1: () => setMode(''), 2: () => setMode('raw-only'), 3: () => setMode('ren-only') };
+  document.addEventListener('keydown', e => {
+    const act = keys[e.key.toLowerCase()];
+    if (!act || !e.ctrlKey || e.altKey || e.shiftKey) return;
+    e.preventDefault();
+    act();
+  });
+}
+if (!navigator.userAgent.includes('Mac')) {
+  const open = document.getElementById('open'), hint = document.querySelector('#empty small');
+  open.title = open.title.replace('⌘', 'Ctrl+');
+  hint.textContent = hint.textContent.replace('⌘', 'Ctrl+');
+}
+
 // --- Loading from disk -------------------------------------------------------------------------
 async function refresh() {
   try {
