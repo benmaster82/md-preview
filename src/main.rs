@@ -78,6 +78,9 @@ fn main() {
     let split_item = MenuItem::new("Split", true, "CmdOrCtrl+1".parse().ok());
     let raw_item = MenuItem::new("Raw Only", true, "CmdOrCtrl+2".parse().ok());
     let ren_item = MenuItem::new("Rendered Only", true, "CmdOrCtrl+3".parse().ok());
+    let find_item = MenuItem::new("Find…", true, "CmdOrCtrl+F".parse().ok());
+    let find_next_item = MenuItem::new("Find Next", true, "CmdOrCtrl+G".parse().ok());
+    let find_prev_item = MenuItem::new("Find Previous", true, "CmdOrCtrl+Shift+G".parse().ok());
     let file_menu = Submenu::with_items("File", true, &[&open_item, &save_item, &PredefinedMenuItem::separator()]).unwrap();
     let edit_menu = Submenu::with_items(
         "Edit",
@@ -90,6 +93,10 @@ fn main() {
             &PredefinedMenuItem::copy(None),
             &PredefinedMenuItem::paste(None),
             &PredefinedMenuItem::select_all(None),
+            &PredefinedMenuItem::separator(),
+            &find_item,
+            &find_next_item,
+            &find_prev_item,
         ],
     )
     .unwrap();
@@ -199,16 +206,22 @@ fn main() {
                         let _ = v.webview.evaluate_script("save(false)");
                     }
                 } else if let Some(v) = focused.and_then(|id| viewers.get(&id)) {
-                    let mode = if e.id == split_item.id() {
-                        ""
+                    let script = if e.id == split_item.id() {
+                        "setMode('')"
                     } else if e.id == raw_item.id() {
-                        "raw-only"
+                        "setMode('raw-only')"
                     } else if e.id == ren_item.id() {
-                        "ren-only"
+                        "setMode('ren-only')"
+                    } else if e.id == find_item.id() {
+                        "openFind()"
+                    } else if e.id == find_next_item.id() {
+                        "findStep(1)"
+                    } else if e.id == find_prev_item.id() {
+                        "findStep(-1)"
                     } else {
                         return;
                     };
-                    let _ = v.webview.evaluate_script(&format!("setMode('{mode}')"));
+                    let _ = v.webview.evaluate_script(script);
                 }
             }
             Event::UserEvent(UserEvent::Dirty(id, dirty)) => {

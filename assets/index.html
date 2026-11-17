@@ -12,6 +12,10 @@
 <header>
   <button id="open" title="Open a file (⌘O)">Open…</button>
   <span class="status" id="status"></span>
+  <span id="find" hidden>
+    <input id="find-q" placeholder="Find" spellcheck="false" autocapitalize="off" autocomplete="off"><span id="find-n"></span>
+    <button id="find-prev" title="Previous (⇧⌘G)">‹</button><button id="find-next" title="Next (⌘G)">›</button><button id="find-close" title="Close (Esc)">✕</button>
+  </span>
   <span class="seg">
     <button data-mode="">Split</button><button data-mode="raw-only">Raw</button><button data-mode="ren-only">Rendered</button>
   </span>

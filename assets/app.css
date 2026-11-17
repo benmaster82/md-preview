@@ -36,3 +36,17 @@ main.ren-only { grid-template-columns:1fr; } main.ren-only #raw { display:none; 
 #empty:hover { color:var(--fg); }
 body.is-empty main { display:none; } body.is-empty #empty { display:flex; }
 body.is-empty header .seg { visibility:hidden; }
+/* Find bar and match highlights (in the gutter mirror they show through the transparent textarea). */
+#find { display:flex; align-items:center; gap:4px; }
+#find[hidden] { display:none; }
+#find-q { width:180px; font-size:12px; padding:3px 6px; border:1px solid var(--line); border-radius:6px;
+  background:var(--bg); color:var(--fg); outline:none; }
+#find-q:focus { border-color:var(--muted); }
+#find-n { color:var(--muted); min-width:4.5em; text-align:center; }
+#find button { background:none; border:none; color:var(--fg); cursor:pointer; font-size:13px; padding:2px 5px; border-radius:4px; }
+#find button:hover { background:var(--line); }
+mark.hit { background:rgba(255,212,0,.45); color:inherit; border-radius:2px; }
+mark.hit.cur { background:#ff9632; }
+@media (prefers-color-scheme: dark) {
+  mark.hit { background:rgba(187,128,9,.55); } mark.hit.cur { background:#e8742c; }
+}
